@@ -141,7 +141,7 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # 2. 用户输入处理（避免重渲染冲突）
-if prompt := st.chat_input("请输入天气查询指令（例如：北京今天天气、上海未来3天天气）"):
+if prompt := st.chat_input("请输入天气的查询指令（例如：北京今天天气、上海未来3天天气）"):
     # 立即记录用户消息并渲染
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
