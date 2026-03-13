@@ -176,9 +176,9 @@ if send_btn and user_input.strip():
     st.session_state.input_key = str(uuid.uuid4())
     
     # 5. 强制刷新页面（让新消息渲染，无DOM操作）
-    st.rerun()  # 低版本Streamlit用：st.experimental_rerun()
+    st.experimental_rerun()  # 低版本Streamlit用：st.experimental_rerun()
 
 # 可选：清空聊天记录按钮
 if st.button("清空聊天记录", type="secondary"):
     st.session_state.messages = []
-    st.rerun()
+    st.experimental_rerun()
