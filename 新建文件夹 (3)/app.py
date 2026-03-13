@@ -11,7 +11,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# 侧边栏：API Key 配置（也可通过 Streamlit Secrets 配置）
+# 侧边栏：API Key 配置
 with st.sidebar:
     st.title("🔧 配置项")
     QWEATHER_KEY = st.text_input("和风天气 API Key", type="password", value=os.getenv("QWEATHER_KEY", ""))
@@ -22,9 +22,12 @@ with st.sidebar:
 st.title("🌤️ 豆包天气智能体")
 st.caption("支持自然语言查询全国城市天气 | 基于 Streamlit Cloud 部署")
 
-# ===================== 核心工具函数 =====================
+# ===================== 初始化会话状态（优化版） =====================
+if "messages" not in st.session_state:
+    st.session_state.messages = []  # 统一用 messages 命名，避免冲突
+
+# ===================== 核心工具函数（保持不变） =====================
 def parse_intent(user_input, llm_api_key, llm_type):
-    """解析用户意图（城市+时间范围）"""
     prompt = f"""
     请严格按照JSON格式解析用户的天气查询指令，仅返回JSON，无其他内容：
     {{
@@ -34,7 +37,6 @@ def parse_intent(user_input, llm_api_key, llm_type):
     用户输入：{user_input}
     """
     try:
-        # OpenAI 调用
         if llm_type == "openai":
             import openai
             openai.api_key = llm_api_key
@@ -44,7 +46,6 @@ def parse_intent(user_input, llm_api_key, llm_type):
                 temperature=0.1
             )
             intent = json.loads(response.choices[0].message.content)
-        # 智谱 GLM 调用
         elif llm_type == "zhipu":
             from zhipuai import ZhipuAI
             zhipu_client = ZhipuAI(api_key=llm_api_key)
@@ -60,7 +61,6 @@ def parse_intent(user_input, llm_api_key, llm_type):
         return {"city": "未指定", "time_range": "今天"}
 
 def get_city_loc(city, qweather_key):
-    """获取城市经纬度"""
     if not qweather_key:
         st.error("请先配置和风天气 API Key！")
         return None
@@ -81,12 +81,10 @@ def get_city_loc(city, qweather_key):
         return None
 
 def get_weather(city, time_range, qweather_key):
-    """获取天气数据"""
     loc = get_city_loc(city, qweather_key)
     if not loc:
         return {"error": f"未找到「{city}」的天气信息"}
     
-    # 今日天气
     if time_range in ["今天", "未指定"]:
         url = f"https://devapi.qweather.com/v7/weather/now?location={loc['lon']},{loc['lat']}&key={qweather_key}"
         resp = requests.get(url).json()
@@ -100,8 +98,6 @@ def get_weather(city, time_range, qweather_key):
                 "wind": f"{resp['now']['windDir']}{resp['now']['windScale']}级",
                 "type": "today"
             }
-    
-    # 未来3天
     elif time_range == "未来3天":
         url = f"https://devapi.qweather.com/v7/weather/3d?location={loc['lon']},{loc['lat']}&key={qweather_key}"
         resp = requests.get(url).json()
@@ -116,14 +112,11 @@ def get_weather(city, time_range, qweather_key):
                     "wind": f"{day['windDirDay']}{day['windScaleDay']}级"
                 })
             return {"city": loc["name"], "type": "3days", "data": data}
-    
     return {"error": "暂不支持该时间范围查询（仅支持今天/未来3天）"}
 
 def generate_answer(weather_data):
-    """生成自然语言回答"""
     if "error" in weather_data:
         return weather_data["error"]
-    
     if weather_data["type"] == "today":
         answer = f"""
 ### 【{weather_data['city']} 实时天气】
@@ -141,42 +134,43 @@ def generate_answer(weather_data):
             """
     return answer.strip()
 
-# ===================== 交互逻辑 =====================
-# 初始化对话历史（Streamlit 会话状态）
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# ===================== 重构聊天交互逻辑（关键修复） =====================
+# 1. 渲染历史消息（稳定版写法）
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# 显示历史对话
-for msg in st.session_state.chat_history:
-    if msg["role"] == "user":
-        st.chat_message("user").write(msg["content"])
-    else:
-        st.chat_message("assistant").write(msg["content"])
-
-# 用户输入框
-user_input = st.chat_input("请输入天气查询指令（例如：北京今天天气、上海未来3天天气）")
-
-if user_input:
-    # 记录用户输入
-    st.session_state.chat_history.append({"role": "user", "content": user_input})
-    st.chat_message("user").write(user_input)
+# 2. 用户输入处理（避免重渲染冲突）
+if prompt := st.chat_input("请输入天气查询指令（例如：北京今天天气、上海未来3天天气）"):
+    # 立即记录用户消息并渲染
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
     
-    # 核心流程：解析意图 → 获取天气 → 生成回答
-    with st.spinner("正在查询天气..."):
-        # 1. 解析意图
-        intent = parse_intent(user_input, LLM_API_KEY, LLM_TYPE)
-        city = intent["city"]
-        time_range = intent["time_range"]
-        
-        # 2. 校验城市
-        if city == "未指定":
-            answer = "😥 我没识别到你要查询的城市哦，请告诉我具体城市名，比如「北京今天天气」"
-        else:
-            # 3. 获取天气数据
-            weather_data = get_weather(city, time_range, QWEATHER_KEY)
-            # 4. 生成回答
-            answer = generate_answer(weather_data)
-    
-    # 显示并记录回答
-    st.chat_message("assistant").markdown(answer)
-    st.session_state.chat_history.append({"role": "assistant", "content": answer})
+    # 处理查询逻辑（包裹在 try-except 中，避免中断渲染）
+    try:
+        with st.chat_message("assistant"):
+            with st.spinner("正在查询天气..."):
+                # 解析意图
+                intent = parse_intent(prompt, LLM_API_KEY, LLM_TYPE)
+                city = intent["city"]
+                time_range = intent["time_range"]
+                
+                # 校验城市
+                if city == "未指定":
+                    response = "😥 我没识别到你要查询的城市哦，请告诉我具体城市名，比如「北京今天天气」"
+                else:
+                    # 获取天气并生成回答
+                    weather_data = get_weather(city, time_range, QWEATHER_KEY)
+                    response = generate_answer(weather_data)
+                
+                # 渲染回答
+                st.markdown(response)
+        # 记录助手消息
+        st.session_state.messages.append({"role": "assistant", "content": response})
+    except Exception as e:
+        # 异常兜底，避免 DOM 崩溃
+        error_msg = f"查询出错：{str(e)}"
+        with st.chat_message("assistant"):
+            st.error(error_msg)
+        st.session_state.messages.append({"role": "assistant", "content": error_msg})
